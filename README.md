@@ -26,6 +26,8 @@ of the day it leaves things alone.
 - **A way back.** If today's painting is not to your liking, page through the earlier ones still in
   the cache and set any of them again. Nothing is fetched for that, and there is deliberately no
   "give me another" button: a new painting only comes with a new day.
+- **Configurable look.** Margin, backdrop brightness, upscaling, the greeting and the range of
+  years are settings in an optional `config.toml`.
 - **A shell that matches.** With Noctalia's colour scheme set to follow the wallpaper, every day's
   painting retints the bar and the rest of the shell.
 - **Fails politely.** Without a network, yesterday's painting stays and the day is retried on the
@@ -129,6 +131,7 @@ working.
 | `ars_mediaevalis info` | print the current artwork to the terminal |
 | `ars_mediaevalis list` | list the earlier artworks still in the cache |
 | `ars_mediaevalis use <id>` | bring back an earlier artwork from the cache, without any download |
+| `ars_mediaevalis config` | print the settings in effect and where to change them |
 
 In the window, **‹ Earlier** and **Later ›** page through the cached artworks, **Use as wallpaper**
 sets the one on screen, and Escape closes it. A chosen artwork stays for the rest of the day.
@@ -148,6 +151,33 @@ https://en.wikipedia.org/wiki/Bartolo_di_Fredi
 
 Add `-v` before the command for debug logging. Exit code 0 means the artwork is on the screens; 1
 means something was missing (no network, no Hyprland session, Noctalia not answering).
+
+## Configuration
+
+Everything works without a configuration file. To change something, copy the example and edit it:
+
+```
+mkdir -p ~/.config/ars_mediaevalis
+cp config.example.toml ~/.config/ars_mediaevalis/config.toml
+```
+
+| Setting | Default | Meaning |
+|---------|---------|---------|
+| `margin` | `0.06` | fraction of the screen left free around the painting (0 to 0.45) |
+| `background_brightness` | `0.45` | brightness of the blurred backdrop: 0 is black, 1 is as bright as the painting |
+| `max_upscale` | `1.5` | how far a small painting may be enlarged (1 = never, up to 10) |
+| `greeting` | `true` | open the window when a new day's painting arrives |
+| `date_begin`, `date_end` | `1200`, `1500` | years searched in the Met's European Paintings department |
+| `pool_max_age_days` | `30` | days after which the list of candidate paintings is fetched again |
+
+Wallpaper settings apply on the next run, also to today's painting. The date range applies from
+the next new painting on; changing it rebuilds the pool of candidates. The Cloisters and Medieval
+Art departments are always searched in full, and only paintings are ever picked: which collection
+the works come from is what the tool is, so it is not a setting.
+
+`ars_mediaevalis config` prints the settings in effect and the path of the file. A misspelt
+setting or a value out of range is reported in the log and replaced by its default; it never stops
+the wallpaper from changing.
 
 ## How it works
 
@@ -172,6 +202,7 @@ login ──► ars_mediaevalis run
 | `picker.py` | Hyprland monitors, wallpaper composition, Noctalia |
 | `state.py` | `state.json` with atomic writes, and the run lock |
 | `viewer.py` | the GTK 4 window |
+| `config.py` | `config.toml`: defaults, overrides and validation |
 | `cli.py` | the commands and the daily rule |
 | `paths.py` | XDG directories |
 
@@ -179,6 +210,7 @@ login ──► ars_mediaevalis run
 
 | Path | Contents |
 |------|----------|
+| `~/.config/ars_mediaevalis/config.toml` | your settings (optional) |
 | `~/.cache/ars_mediaevalis/pool.json` | the pool of candidate object IDs, rebuilt every 30 days |
 | `~/.cache/ars_mediaevalis/images/` | downloaded images with their details, and the composed wallpapers |
 | `~/.local/state/ars_mediaevalis/state.json` | the current artwork, shown and rejected IDs |
@@ -187,13 +219,6 @@ login ──► ars_mediaevalis run
 The directories follow the XDG Base Directory variables if they are set. Deleting the cache costs a
 re-download of today's image and forgets the earlier artworks you could go back to. Deleting the
 state forgets today's pick and which works have been shown.
-
-### Changing what is picked
-
-The searches that build the pool are the `QUERIES` list in `src/ars_mediaevalis/museums/met.py`: by
-default The Cloisters, Medieval Art, and European Paintings from 1200 to 1500. The pool is rebuilt
-automatically when the list changes. The appearance of the wallpaper is set by the constants at the
-top of `src/ars_mediaevalis/picker.py` (margin, background brightness, maximum upscale).
 
 ## Development
 

@@ -1,0 +1,34 @@
+# Ars Mediaevalis configuration.
+#
+# Copy to ~/.config/ars_mediaevalis/config.toml and change what you like.
+# Every setting is optional; the values below are the defaults.
+# `ars_mediaevalis config` prints the settings in effect.
+
+# --- Wallpaper ---------------------------------------------------------------
+# Changes apply on the next run, also to today's painting.
+
+# Fraction of the screen left free around the painting (0 to 0.45).
+margin = 0.06
+
+# Brightness of the blurred backdrop: 0 is black, 1 is as bright as the painting.
+background_brightness = 0.45
+
+# How far a small painting may be enlarged (1 = never, up to 10).
+max_upscale = 1.5
+
+# --- Greeting ----------------------------------------------------------------
+
+# Open the window when a new day's painting arrives. With false, the wallpaper
+# changes silently; `ars_mediaevalis show` still opens the window.
+greeting = true
+
+# --- Which paintings ---------------------------------------------------------
+# Changes apply from the next new painting on.
+
+# Years searched in the Met's European Paintings department. The Cloisters and
+# Medieval Art departments are always included in full.
+date_begin = 1200
+date_end = 1500
+
+# Days after which the list of candidate paintings is fetched again.
+pool_max_age_days = 30

@@ -3,6 +3,7 @@ import contextlib
 import dataclasses
 import datetime
 import io
+import json
 import logging
 import os
 import subprocess
@@ -34,6 +35,7 @@ class CliTestCase(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         self.images: Path = Path(tmp.name) / "cache" / "ars_mediaevalis" / "images"
         self.state_file: Path = Path(tmp.name) / "state" / "ars_mediaevalis" / "state.json"
+        self.config_file: Path = Path(tmp.name) / "config" / "ars_mediaevalis" / "config.toml"
 
         self.records: dict[int, dict] = {i: met_record(i) for i in (1, 2, 3)}
         self.image: bytes = jpeg_bytes()
@@ -61,8 +63,8 @@ class CliTestCase(unittest.TestCase):
             "env": mock.patch.dict(os.environ, {
                 "XDG_CACHE_HOME": str(Path(tmp.name) / "cache"),
                 "XDG_STATE_HOME": str(Path(tmp.name) / "state"),
+                "XDG_CONFIG_HOME": str(Path(tmp.name) / "config"),
             }),
-            "queries": mock.patch.object(cli.met, "QUERIES", [{"departmentId": 7}]),
             "sleep": mock.patch.object(cli.met.time, "sleep"),
             "make_client": mock.patch.object(
                 cli.met, "make_client", side_effect=lambda: httpx.Client(transport=httpx.MockTransport(handler))
@@ -75,6 +77,17 @@ class CliTestCase(unittest.TestCase):
         for name, patcher in patchers.items():
             setattr(self, name, patcher.start())
             self.addCleanup(patcher.stop)
+
+    def configure(self, toml: str) -> None:
+        """Writes the user's config.toml."""
+
+        self.config_file.parent.mkdir(parents=True, exist_ok=True)
+        self.config_file.write_text(toml)
+
+    def search_requests(self) -> list[dict[str, str]]:
+        """Returns the query parameters of the searches sent to the fake API so far."""
+
+        return [dict(r.url.params) for r in self.requests if r.url.path.endswith("/search")]
 
     def state(self) -> cli.state.State:
         """Returns the state as it is on disk."""
@@ -175,7 +188,8 @@ class TestRunSameDay(CliTestCase):
         """Tests that the same image is handed to the desktop again."""
 
         cli.run()
-        self.apply.assert_called_once_with(Path(self.first["image_path"]))
+        self.apply.assert_called_once()
+        self.assertEqual(self.apply.call_args.args[0], Path(self.first["image_path"]))
 
     def test_does_not_greet_again(self) -> None:
         """Tests that the greeting window is not opened again on later logins that day."""
@@ -276,7 +290,8 @@ class TestRunNewDay(CliTestCase):
 
         self.assertEqual(cli.run(), 1)
 
-        self.apply.assert_called_once_with(Path(self.first["image_path"]))
+        self.apply.assert_called_once()
+        self.assertEqual(self.apply.call_args.args[0], Path(self.first["image_path"]))
         self.greet.assert_not_called()
 
     def test_offline_does_not_advance_the_date(self) -> None:
@@ -403,7 +418,8 @@ class TestUse(CliTestCase):
 
         self.assertEqual(cli.use(self.earlier["object_id"]), 0)
 
-        self.apply.assert_called_once_with(Path(self.earlier["image_path"]))
+        self.apply.assert_called_once()
+        self.assertEqual(self.apply.call_args.args[0], Path(self.earlier["image_path"]))
         self.assertEqual(self.state().artwork, self.earlier)
 
     def test_makes_no_request(self) -> None:
@@ -427,7 +443,8 @@ class TestUse(CliTestCase):
 
         self.assertEqual(cli.run(), 0)
 
-        self.apply.assert_called_once_with(Path(self.earlier["image_path"]))
+        self.apply.assert_called_once()
+        self.assertEqual(self.apply.call_args.args[0], Path(self.earlier["image_path"]))
         self.assertEqual(self.requests, [])
         self.greet.assert_not_called()
 
@@ -549,6 +566,160 @@ class TestGreet(unittest.TestCase):
         popen.return_value.wait.assert_not_called()
 
 
+class TestRunWithConfig(CliTestCase):
+    """Tests that run() and use() follow the user's config.toml as intended."""
+
+    def test_defaults_without_a_file(self) -> None:
+        """Tests that without a config.toml the default style is handed to the desktop."""
+
+        cli.run()
+        self.assertEqual(self.apply.call_args.kwargs, {"margin": 0.06, "brightness": 0.45, "max_upscale": 1.5})
+
+    def test_style_settings_reach_the_wallpaper(self) -> None:
+        """Tests that margin, background_brightness and max_upscale are passed on to apply()."""
+
+        self.configure("margin = 0.1\nbackground_brightness = 0.3\nmax_upscale = 2.0\n")
+        cli.run()
+        self.assertEqual(self.apply.call_args.kwargs, {"margin": 0.1, "brightness": 0.3, "max_upscale": 2.0})
+
+    def test_style_change_applies_to_todays_painting(self) -> None:
+        """Tests that a setting changed during the day is used on the next run, without the network."""
+
+        cli.run()
+        self.requests.clear()
+        self.configure("margin = 0.2\n")
+
+        self.assertEqual(cli.run(), 0)
+
+        self.assertEqual(self.apply.call_args.kwargs["margin"], 0.2)
+        self.assertEqual(self.requests, [])
+
+    def test_use_follows_the_style_settings(self) -> None:
+        """Tests that an earlier artwork is brought back in the configured style."""
+
+        cli.run()
+        self.configure("background_brightness = 0.2\n")
+
+        cli.use(self.state().artwork["object_id"])
+
+        self.assertEqual(self.apply.call_args.kwargs["brightness"], 0.2)
+
+    def test_greeting_can_be_turned_off(self) -> None:
+        """Tests that with greeting = false the wallpaper changes but no window is opened."""
+
+        self.configure("greeting = false\n")
+
+        self.assertEqual(cli.run(), 0)
+
+        self.apply.assert_called_once()
+        self.greet.assert_not_called()
+
+    def test_turning_the_greeting_back_on_does_not_greet_late(self) -> None:
+        """Tests that a day whose greeting was skipped is not greeted later that day."""
+
+        self.configure("greeting = false\n")
+        cli.run()
+        self.configure("greeting = true\n")
+
+        cli.run()
+
+        self.greet.assert_not_called()
+
+    def test_default_date_range_is_searched(self) -> None:
+        """Tests that European Paintings are searched from 1200 to 1500 by default."""
+
+        cli.run()
+        ranges: list[tuple] = [(q["dateBegin"], q["dateEnd"]) for q in self.search_requests() if "dateBegin" in q]
+        self.assertEqual(ranges, [("1200", "1500")])
+
+    def test_date_range_setting_is_searched(self) -> None:
+        """Tests that date_begin and date_end reach the Met search."""
+
+        self.configure("date_begin = 1300\ndate_end = 1600\n")
+        cli.run()
+        ranges: list[tuple] = [(q["dateBegin"], q["dateEnd"]) for q in self.search_requests() if "dateBegin" in q]
+        self.assertEqual(ranges, [("1300", "1600")])
+
+    def test_changed_date_range_rebuilds_the_pool(self) -> None:
+        """Tests that the cached pool is searched for again once the date range changes."""
+
+        cli.run()
+        self.today = TOMORROW
+        self.requests.clear()
+        self.configure("date_end = 1600\n")
+
+        self.assertEqual(cli.run(), 0)
+
+        self.assertEqual(len(self.search_requests()), 3)
+
+    def test_pool_age_setting(self) -> None:
+        """Tests that pool_max_age_days decides when the cached pool is fetched again."""
+
+        cli.run()
+        pool_file: Path = self.images.parent / "pool.json"
+        pool: dict = json.loads(pool_file.read_text())
+        pool["built_at"] = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=10)).isoformat()
+        pool_file.write_text(json.dumps(pool))
+
+        self.today = TOMORROW
+        self.requests.clear()
+        cli.run()
+        self.assertEqual(self.search_requests(), [])   # 10 days old, default limit is 30
+
+        self.configure("pool_max_age_days = 7\n")
+        self.today = datetime.date(2026, 10, 8)
+        cli.run()
+        self.assertEqual(len(self.search_requests()), 3)
+
+    def test_broken_config_does_not_stop_the_run(self) -> None:
+        """Tests that an unparseable config.toml falls back to the defaults and the run succeeds."""
+
+        self.configure("margin = = 0.1\n")
+
+        self.assertEqual(cli.run(), 0)
+        self.assertEqual(self.apply.call_args.kwargs["margin"], 0.06)
+        self.greet.assert_called_once()
+
+
+class TestShowConfig(CliTestCase):
+    """Tests that show_config() prints the settings in effect as intended."""
+
+    def output(self) -> str:
+        """Returns the printed text of show_config()."""
+
+        out: io.StringIO = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(cli.show_config(), 0)
+        return out.getvalue()
+
+    def test_defaults(self) -> None:
+        """Tests that without a file the path is marked as missing and the defaults are printed."""
+
+        text: str = self.output()
+        self.assertIn(f"# {self.config_file} (not there: these are the defaults)", text)
+        for line in ("margin = 0.06", "background_brightness = 0.45", "max_upscale = 1.5", "greeting = true",
+                     "date_begin = 1200", "date_end = 1500", "pool_max_age_days = 30"):
+            self.assertIn(line, text.splitlines())
+
+    def test_overrides(self) -> None:
+        """Tests that settings from the file replace the defaults in the output."""
+
+        self.configure("margin = 0.1\ngreeting = false\n")
+        lines: list[str] = self.output().splitlines()
+        self.assertEqual(lines[0], f"# {self.config_file}")
+        self.assertIn("margin = 0.1", lines)
+        self.assertIn("greeting = false", lines)
+        self.assertIn("date_begin = 1200", lines)
+
+    def test_output_is_valid_toml(self) -> None:
+        """Tests that the output can be saved as a config.toml and read back unchanged."""
+
+        self.configure("margin = 0.1\ngreeting = false\n")
+        before: cli.Config = cli.config.load()
+        self.configure(self.output())
+        self.assertEqual(cli.config.load(), before)
+
+
 class TestInfo(CliTestCase):
     """Tests that info() prints today's artwork as intended."""
 
@@ -600,7 +771,7 @@ class TestMain(unittest.TestCase):
         """Replaces logging setup and every command body with a mock."""
 
         for name, attr in (("logging", "_setup_logging"), ("run", "run"), ("info", "info"),
-                           ("cached_list", "cached_list"), ("use", "use")):
+                           ("cached_list", "cached_list"), ("use", "use"), ("show_config", "show_config")):
             patcher = mock.patch.object(cli, attr, return_value=0)
             setattr(self, name, patcher.start())
             self.addCleanup(patcher.stop)
@@ -628,6 +799,12 @@ class TestMain(unittest.TestCase):
 
         cli.main(["use", "437"])
         self.use.assert_called_once_with(437)
+
+    def test_config(self) -> None:
+        """Tests that `config` prints the settings in effect."""
+
+        cli.main(["config"])
+        self.show_config.assert_called_once_with()
 
     def test_use_needs_a_numeric_id(self) -> None:
         """Tests that `use` without an ID, or with a non-numeric one, is rejected by argparse."""

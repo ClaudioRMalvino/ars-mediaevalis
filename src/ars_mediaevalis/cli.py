@@ -14,8 +14,9 @@ from pathlib import Path
 import httpx
 from PIL import Image
 
-from ars_mediaevalis import artwork, history, picker, state
+from ars_mediaevalis import artwork, config, history, picker, state
 from ars_mediaevalis.artwork import Artwork
+from ars_mediaevalis.config import Config
 from ars_mediaevalis.museums import met
 from ars_mediaevalis.paths import state_dir
 
@@ -25,7 +26,7 @@ log = logging.getLogger("ars_mediaevalis")
 FETCH_ERRORS: tuple[type[Exception], ...] = (httpx.HTTPError, OSError, RuntimeError, ValueError, KeyError)
 
 
-def _fetch_new(client: httpx.Client, st: state.State) -> Artwork:
+def _fetch_new(client: httpx.Client, st: state.State, cfg: Config) -> Artwork:
     """
     Picks a new artwork, looks up its history and downloads its image.
 
@@ -34,11 +35,14 @@ def _fetch_new(client: httpx.Client, st: state.State) -> Artwork:
     Args:
         client (httpx.Client): Client connection.
         st (state.State): the current state.
+        cfg (Config): the settings; they decide which paintings are in the pool.
 
     Returns:
         Artwork: the new artwork, with history and image_path filled in.
     """
-    pool: list[int] = met.load_pool(client)
+    pool: list[int] = met.load_pool(
+        client, cfg.pool_max_age_days, met.build_queries(cfg.date_begin, cfg.date_end)
+    )
     shown, rejected = set(st.shown), set(st.rejected)
     try:
         art: Artwork = artwork.choose(client, pool, shown, rejected)
@@ -77,6 +81,10 @@ def greet() -> None:
     )
 
 
+def _apply(image: Path, cfg: Config) -> None:
+    picker.apply(image, margin=cfg.margin, brightness=cfg.background_brightness, max_upscale=cfg.max_upscale)
+
+
 def run() -> int:
     """
     The daily rule. Safe to call as often as you like.
@@ -89,6 +97,7 @@ def run() -> int:
         int: exit code; 0 if today's artwork is on the screens.
     """
     today: str = date.today().isoformat()
+    cfg: Config = config.load()
     with state.locked():   # login autostart and a timer may fire in the same second
         st: state.State = state.load()
 
@@ -105,7 +114,7 @@ def run() -> int:
         if st.date != today or current is None:
             try:
                 with met.make_client() as client:
-                    art: Artwork = _fetch_new(client, st)
+                    art: Artwork = _fetch_new(client, st, cfg)
             except FETCH_ERRORS as e:
                 log.error("could not get a new artwork: %s", e)
                 state.save(st)
@@ -134,13 +143,14 @@ def run() -> int:
                 state.save(st)
 
         try:
-            picker.apply(Path(art.image_path))
+            _apply(Path(art.image_path), cfg)
         except (picker.DesktopError, OSError) as e:
             log.error("could not set the wallpaper: %s", e)
             return 1
 
         if status == 0 and not st.greeted:
-            greet()
+            if cfg.greeting:
+                greet()
             st.greeted = True
             state.save(st)
         return status
@@ -162,7 +172,7 @@ def use(object_id: int) -> int:
             log.error("artwork %s is not in the cache; `ars_mediaevalis list` shows what is", object_id)
             return 1
         try:
-            picker.apply(Path(art.image_path))
+            _apply(Path(art.image_path), config.load())
         except (picker.DesktopError, OSError) as e:
             log.error("could not set the wallpaper: %s", e)
             return 1
@@ -225,6 +235,20 @@ def info() -> int:
     return 0
 
 
+def show_config() -> int:
+    """
+    Prints where the configuration file is and the settings in effect.
+
+    Returns:
+        int: exit code.
+    """
+    file: Path = config.path()
+    print(f"# {file}" + ("" if file.exists() else " (not there: these are the defaults)"))
+    for name, value in asdict(config.load()).items():
+        print(f"{name} = {str(value).lower() if isinstance(value, bool) else value}")
+    return 0
+
+
 def _setup_logging(verbose: bool) -> None:
     fmt: str = "%(asctime)s %(levelname)s %(name)s: %(message)s"
     logging.basicConfig(level=logging.DEBUG if verbose else logging.INFO, format=fmt)
@@ -261,6 +285,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("list", help="list the earlier artworks still in the cache")
     use_parser = sub.add_parser("use", help="bring back an earlier artwork from the cache (no download)")
     use_parser.add_argument("object_id", type=int, help="ID as printed by `list`")
+    sub.add_parser("config", help="print the settings in effect and where to change them")
     args = ap.parse_args(argv)
 
     _setup_logging(args.verbose)
@@ -274,6 +299,8 @@ def main(argv: list[str] | None = None) -> int:
             return cached_list()
         case "use":
             return use(args.object_id)
+        case "config":
+            return show_config()
         case "show":
             from ars_mediaevalis import viewer   # lazy: only import GTK when needed
             return viewer.show_today()

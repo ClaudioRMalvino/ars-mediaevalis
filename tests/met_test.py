@@ -316,6 +316,43 @@ class TestSearchAll(MetTestCase):
         self.assertEqual(len(calls), 2)
 
 
+class TestBuildQueries(unittest.TestCase):
+    """Tests that build_queries() describes the pool as intended."""
+
+    def test_default_queries(self) -> None:
+        """Tests that QUERIES is build_queries() with the 1200-1500 default."""
+
+        self.assertEqual(met.QUERIES, met.build_queries())
+        self.assertEqual(met.build_queries(), met.build_queries(1200, 1500))
+
+    def test_departments(self) -> None:
+        """Tests that The Cloisters, Medieval Art and European Paintings are searched, with images only."""
+
+        queries: list[met.SearchQuery] = met.build_queries()
+        self.assertEqual([q["departmentId"] for q in queries], [7, 17, 11])
+        self.assertTrue(all(q["hasImages"] == "true" for q in queries))
+
+    def test_date_range_applies_to_european_paintings_only(self) -> None:
+        """Tests that the years go into the European Paintings query and no other."""
+
+        cloisters, medieval, european = met.build_queries(1300, 1600)
+        self.assertEqual((european["dateBegin"], european["dateEnd"]), (1300, 1600))
+        for query in (cloisters, medieval):
+            self.assertNotIn("dateBegin", query)
+            self.assertNotIn("dateEnd", query)
+
+    def test_no_textiles(self) -> None:
+        """Tests that only paintings are searched for where a medium is given."""
+
+        self.assertEqual({q["medium"] for q in met.build_queries() if "medium" in q}, {"Paintings"})
+
+    def test_queries_survive_a_json_round_trip(self) -> None:
+        """Tests that queries compare equal after being stored in pool.json and read back."""
+
+        queries: list[met.SearchQuery] = met.build_queries(1300, 1600)
+        self.assertEqual(json.loads(json.dumps(queries)), queries)
+
+
 class TestBuildPool(MetTestCase):
     """Tests that _build_pool() merges the results of every query as intended."""
 
@@ -338,6 +375,14 @@ class TestBuildPool(MetTestCase):
             [call.args[1] for call in search_all.call_args_list],
             met.QUERIES,
         )
+
+    def test_given_queries_replace_the_defaults(self) -> None:
+        """Tests that queries passed as an argument are run instead of QUERIES."""
+
+        given: list[met.SearchQuery] = [{"departmentId": 11, "dateBegin": 1300, "dateEnd": 1600}]
+        with mock.patch.object(met, "search_all", return_value=[1]) as search_all:
+            met._build_pool(None, given)
+        self.assertEqual([call.args[1] for call in search_all.call_args_list], given)
 
     def test_no_results_gives_empty_pool(self) -> None:
         """Tests that queries without results give an empty pool."""
@@ -438,6 +483,29 @@ class TestLoadPool(MetTestCase):
             self.assertEqual(met.load_pool(self.client), [2])
             self.assertEqual(met.load_pool(self.client), [2])
         self.assertEqual(len(self.requests), 1)
+
+    def test_queries_argument_defines_the_pool(self) -> None:
+        """Tests that queries passed as an argument are searched and recorded in pool.json."""
+
+        given: list[met.SearchQuery] = [{"departmentId": 17}]
+        self.assertEqual(met.load_pool(self.client, queries=given), [2])
+        self.assertEqual(json.loads(self.pool_file.read_text())["queries"], given)
+
+    def test_queries_argument_invalidates_another_pool(self) -> None:
+        """Tests that a fresh pool built with the default queries is rebuilt for other queries, and back."""
+
+        self.assertEqual(met.load_pool(self.client), [1, 2, 3])
+        self.assertEqual(met.load_pool(self.client, queries=[{"departmentId": 17}]), [2])
+        self.assertEqual(met.load_pool(self.client), [1, 2, 3])
+
+    def test_same_queries_argument_uses_the_cache(self) -> None:
+        """Tests that a second call with equal queries makes no request."""
+
+        given: list[met.SearchQuery] = [{"departmentId": 17}]
+        met.load_pool(self.client, queries=given)
+        self.requests.clear()
+        self.assertEqual(met.load_pool(self.client, queries=[{"departmentId": 17}]), [2])
+        self.assertEqual(self.requests, [])
 
     def test_cache_without_queries_is_rebuilt(self) -> None:
         """Tests that a pool.json from before queries were recorded is rebuilt."""

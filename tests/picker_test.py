@@ -445,6 +445,65 @@ class TestComposeWallpaper(unittest.TestCase):
                 with mock.patch.object(picker, setting, value):
                     self.assertNotEqual(picker.compose_wallpaper(src, (800, 600)), default)
 
+    def test_style_arguments_get_their_own_file(self) -> None:
+        """Tests that margin, brightness and max_upscale passed as arguments end up in the file name."""
+
+        src: Path = self.source((400, 200), "met-437.png")
+        wall: Path = picker.compose_wallpaper(src, (800, 600), margin=0.1, brightness=0.3, max_upscale=2.0)
+        self.assertEqual(wall, self.dir / "met-437-wall-800x600-m10-b30-u20.jpg")
+
+    def test_arguments_override_the_constants(self) -> None:
+        """Tests that an argument wins over the module constant, and None falls back to it."""
+
+        src: Path = self.source((400, 200), "met-437.png")
+        with mock.patch.object(picker, "MARGIN", 0.2):
+            self.assertIn("-m20-", picker.compose_wallpaper(src, (800, 600)).name)
+            self.assertIn("-m20-", picker.compose_wallpaper(src, (800, 600), margin=None).name)
+            self.assertIn("-m5-", picker.compose_wallpaper(src, (800, 600), margin=0.05).name)
+
+    def test_margin_argument_shrinks_the_painting(self) -> None:
+        """Tests that a larger margin leaves more background around a large painting."""
+
+        # 2000x1000 on 800x600 with a 0.2 margin: the box is 480x360, so 480x240 at (160, 180).
+        wall: Path = picker.compose_wallpaper(self.source((2000, 1000)), (800, 600), margin=0.2)
+
+        self.assert_background(wall, (152, 300))
+        self.assert_painting(wall, (168, 300))
+        self.assert_background(wall, (400, 172))
+        self.assert_painting(wall, (400, 188))
+
+    def test_brightness_argument_darkens_the_background(self) -> None:
+        """Tests that the corners show the source darkened by the given brightness."""
+
+        wall: Path = picker.compose_wallpaper(self.source((400, 200)), (800, 600), brightness=0.2)
+        self.assertAlmostEqual(self.luma(wall, (2, 2)), round(WHITE * 0.2), delta=12)
+        self.assert_painting(wall, (400, 300))
+
+    def test_black_and_full_brightness(self) -> None:
+        """Tests the ends of the range: 0 gives a black backdrop, 1 leaves it as bright as the painting."""
+
+        src: Path = self.source((400, 200))
+        self.assertLess(self.luma(picker.compose_wallpaper(src, (800, 600), brightness=0.0), (2, 2)), 12)
+        self.assertGreater(self.luma(picker.compose_wallpaper(src, (800, 600), brightness=1.0), (2, 2)), 243)
+
+    def test_max_upscale_argument(self) -> None:
+        """Tests that max_upscale = 1 leaves a small painting at its own size."""
+
+        # 400x200 on 800x600 at 1x: 400x200 at (200, 200).
+        wall: Path = picker.compose_wallpaper(self.source((400, 200)), (800, 600), max_upscale=1.0)
+
+        self.assert_background(wall, (192, 300))
+        self.assert_painting(wall, (208, 300))
+        self.assert_background(wall, (400, 192))
+        self.assert_painting(wall, (400, 208))
+
+    def test_zero_margin_fills_the_tight_side(self) -> None:
+        """Tests that margin = 0 lets a large painting reach the screen edges on its tight side."""
+
+        wall: Path = picker.compose_wallpaper(self.source((2000, 1000)), (800, 600), margin=0.0)
+        self.assert_painting(wall, (4, 300))
+        self.assert_painting(wall, (795, 300))
+
     def test_existing_wallpaper_is_reused(self) -> None:
         """Tests that a wallpaper already on disk is returned without being composed again."""
 
@@ -663,6 +722,26 @@ class TestApply(unittest.TestCase):
         picker.apply(self.src)
 
         self.assertEqual([cmd[3] for cmd in self.noctalia_calls], ["DP-1"])
+
+    def test_style_is_passed_to_every_monitor(self) -> None:
+        """Tests that the style arguments shape the wallpaper of each monitor."""
+
+        picker.apply(self.src, margin=0.1, brightness=0.3, max_upscale=2.0)
+
+        self.assertEqual(
+            [Path(cmd[4]).name for cmd in self.noctalia_calls],
+            ["met-1-wall-800x600-m10-b30-u20.jpg", "met-1-wall-1440x600-m10-b30-u20.jpg"],
+        )
+
+    def test_changed_style_replaces_the_wallpaper(self) -> None:
+        """Tests that the same image in another style is set again, as it is a different file."""
+
+        picker.apply(self.src)
+        self.noctalia_calls.clear()
+
+        picker.apply(self.src, margin=0.1)
+
+        self.assertEqual([cmd[3] for cmd in self.noctalia_calls], ["eDP-1", "DP-1"])
 
     def test_disabled_monitor_is_ignored(self) -> None:
         """Tests that no wallpaper is set on a disabled monitor."""

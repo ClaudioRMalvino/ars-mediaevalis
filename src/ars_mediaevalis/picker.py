@@ -116,9 +116,14 @@ def _to_srgb(im: Image.Image) -> Image.Image:
     return im.convert("RGB")
 
 
-def compose_wallpaper(src: Path, size: tuple[int, int]) -> Path:
+def compose_wallpaper(src: Path, size: tuple[int, int], margin: float | None = None,
+                      brightness: float | None = None, max_upscale: float | None = None) -> Path:
+    """Compose `src` for a screen of `size`. Style arguments left at None use the constants above."""
     w, h = size
-    tag = f"{w}x{h}-m{round(MARGIN * 100)}-b{round(BRIGHTNESS * 100)}-u{round(MAX_UPSCALE * 10)}"
+    margin = MARGIN if margin is None else margin
+    brightness = BRIGHTNESS if brightness is None else brightness
+    max_upscale = MAX_UPSCALE if max_upscale is None else max_upscale
+    tag = f"{w}x{h}-m{round(margin * 100)}-b{round(brightness * 100)}-u{round(max_upscale * 10)}"
     out = src.with_name(f"{src.stem}-wall-{tag}.jpg")
     if out.exists():
         return out
@@ -132,11 +137,11 @@ def compose_wallpaper(src: Path, size: tuple[int, int]) -> Path:
     bg = ImageOps.fit(im, small, Image.Resampling.BILINEAR)
     bg = bg.filter(ImageFilter.GaussianBlur(radius=max(small) / 40))
     bg = bg.resize(size, Image.Resampling.BICUBIC)
-    bg = ImageEnhance.Brightness(bg).enhance(BRIGHTNESS)
+    bg = ImageEnhance.Brightness(bg).enhance(brightness)
 
     # Foreground: fit inside the margin box, but don't blow up small images.
-    box_w, box_h = int(w * (1 - 2 * MARGIN)), int(h * (1 - 2 * MARGIN))
-    scale = min(box_w / im.width, box_h / im.height, MAX_UPSCALE)
+    box_w, box_h = int(w * (1 - 2 * margin)), int(h * (1 - 2 * margin))
+    scale = min(box_w / im.width, box_h / im.height, max_upscale)
     fg = im.resize((max(1, round(im.width * scale)), max(1, round(im.height * scale))),
                    Image.Resampling.LANCZOS)
     bg.paste(fg, ((w - fg.width) // 2, (h - fg.height) // 2))
@@ -150,10 +155,11 @@ def compose_wallpaper(src: Path, size: tuple[int, int]) -> Path:
 
 # --- Public entry point -----------------------------------------------------
 
-def apply(src: Path) -> None:
+def apply(src: Path, margin: float | None = None, brightness: float | None = None,
+          max_upscale: float | None = None) -> None:
     """Compose for each monitor at its own resolution and set it via Noctalia."""
     for mon in monitors():
-        wall = compose_wallpaper(src, (mon.width, mon.height))
+        wall = compose_wallpaper(src, (mon.width, mon.height), margin, brightness, max_upscale)
         if _noctalia_get(mon.name) == str(wall):
             # Setting it again would make Noctalia regenerate its theme, which rewrites
             # ~/.config/hypr/noctalia.lua and so reloads the whole Hyprland config.
