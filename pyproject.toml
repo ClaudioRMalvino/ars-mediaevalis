@@ -12,6 +12,7 @@ dependencies = [
     "httpx>=0.28.1",
     "requests>=2.34.2",
     "pillow>=10",
+    "pygobject>=3.50",
 ]
 
 [project.scripts]

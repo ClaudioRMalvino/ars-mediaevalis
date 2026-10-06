@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Final, Literal, Required, TypedDict
+from typing import Any, Final, Literal, Required, TypedDict
 
 import json
 import logging
@@ -7,14 +7,13 @@ import time
 from datetime import datetime, timedelta, timezone
 import httpx
 from pathlib import Path
-from typing_extensions import Any
 
 from ars_mediaevalis.paths import cache_dir
 
 log = logging.getLogger(__name__)
 
 BASE_URL: str = "https://collectionapi.metmuseum.org/public/collection"
-USER_AGENT: str = "ars_mediaevalis/0.1 (https://github/ClaudioRMalvino/ars-mediaevalis)"
+USER_AGENT: str = "ars_mediaevalis/0.1 (https://github.com/ClaudioRMalvino/ars-mediaevalis)"
 
 class SearchQuery(TypedDict, total=False):
     departmentId: Required[int]
@@ -26,12 +25,12 @@ class SearchQuery(TypedDict, total=False):
     isOnView: Literal["true", "false"]
     geoLocation: str
 
+# Paintings only. The search's medium filter is loose (it also returns manuscripts,
+# sculptures and facsimiles), so artwork.is_painting() checks each object again.
 QUERIES: Final[list[SearchQuery]] = [
-    {"departmentId": 7,  "hasImages": "true", "medium": "Paintings"},
-    {"departmentId": 7,  "hasImages": "true", "medium": "Textiles"},
-    {"departmentId": 17,  "hasImages": "true", "medium": "Textiles"},
-    {"departmentId": 17, "hasImages": "true", "medium": "Paintings"},
-    {"departmentId": 11, "hasImages": "true", "dateBegin": 1200, "dateEnd": 1500},
+    {"departmentId": 7,  "hasImages": "true", "medium": "Paintings"},                    # The Cloisters
+    {"departmentId": 17, "hasImages": "true", "medium": "Paintings"},                    # Medieval Art
+    {"departmentId": 11, "hasImages": "true", "dateBegin": 1200, "dateEnd": 1500},       # European Paintings
 ]
 
 PAGE: int = 500
@@ -62,7 +61,7 @@ def _retryable(exc: Exception) -> bool:
     """
     if isinstance(exc, httpx.TransportError):
         return True
-    if isinstance(exec, httpx.HTTPStatusError):
+    if isinstance(exc, httpx.HTTPStatusError):
        code = exc.response.status_code
        return code == 429 or code >= 500
     return False
@@ -135,38 +134,46 @@ def _build_pool(client: httpx.Client) -> list[int]:
     seen: set[int] = set()
     for q in QUERIES:
         found: list[int] = search_all(client, q)
-        log.info("query %s -> %d ids", 1, len(found))
+        log.info("query %s -> %d ids", q, len(found))
         seen.update(found)
     return sorted(seen)
 
 def load_pool(client: httpx.Client, max_age_days: int=30) -> list[int]:
     """
-    Summary.
+    Provides the pool of objectIDs, from the cache if it is recent and was built with
+    the current QUERIES, else by searching again.
 
     Args:
-        client (httpx.Client): Description.
-        max_age_days (int): Description, optional (default: 30).
+        client (httpx.Client): Client to the MET API.
+        max_age_days (int): age at which the cached pool is rebuilt, optional (default: 30).
 
     Returns:
-        list[int]: Description.
+        list[int]: sorted objectIDs. A stale pool is returned if the rebuild fails.
     """
     f: Path = _pool_file()
     cached = None
 
     if f.exists():
-        cached: Any = json.loads(f.read_text())
-        built: datetime = datetime.fromisoformat(cached["built_at"])
-        if datetime.now(timezone.utc) - built < timedelta(days=max_age_days):
-            return cached["ids"]
+        try:
+            cached = json.loads(f.read_text())
+            built: datetime = datetime.fromisoformat(cached["built_at"])
+            fresh: bool = datetime.now(timezone.utc) - built < timedelta(days=max_age_days)
+            if fresh and cached.get("queries") == QUERIES:
+                return cached["ids"]
+        except (ValueError, KeyError, TypeError):
+            log.warning("unreadable pool cache; rebuilding")
+            cached = None
     try:
         ids = _build_pool(client)
     except Exception:
-        if cached:
+        # A pool built with other queries would bring back what the queries now exclude.
+        if cached and cached.get("queries") == QUERIES:
             log.warning("pool rebuild failed; using stale pool", exc_info=True)
             return cached["ids"]
         raise
     f.write_text(json.dumps({
         "built_at": datetime.now(timezone.utc).isoformat(),
+        "queries": QUERIES,
         "ids": ids,
     }))
     return ids

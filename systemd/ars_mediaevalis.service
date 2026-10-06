@@ -1,0 +1,12 @@
+[Unit]
+Description=Ars Mediaevalis: set today's artwork as wallpaper
+
+[Service]
+Type=oneshot
+# %h is the home directory; ~/.local/bin is where `uv tool install` puts the command.
+ExecStart=%h/.local/bin/ars_mediaevalis run
+# The greeting window is a detached child; without this, systemd would kill it
+# together with the rest of the cgroup as soon as the run exits.
+KillMode=process
+# Don't let a slow museum API keep the unit 'activating' forever.
+TimeoutStartSec=5min

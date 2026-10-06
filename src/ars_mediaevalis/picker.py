@@ -89,6 +89,18 @@ def _noctalia_set(monitor: str, path: Path, attempts: int = 5, delay: float = 2.
             time.sleep(delay)
 
 
+def _noctalia_get(monitor: str) -> str | None:
+    """Path of the wallpaper Noctalia shows on `monitor`, or None if it cannot be asked."""
+    try:
+        out = subprocess.run(
+            ["noctalia", "msg", "wallpaper-get", monitor],
+            capture_output=True, text=True, check=True, timeout=5,
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return out or None
+
+
 # --- Composition ------------------------------------------------------------
 
 def _to_srgb(im: Image.Image) -> Image.Image:
@@ -99,7 +111,7 @@ def _to_srgb(im: Image.Image) -> Image.Image:
             src = ImageCms.ImageCmsProfile(io.BytesIO(icc))
             dst = ImageCms.createProfile("sRGB")
             return ImageCms.profileToProfile(im, src, dst, outputMode="RGB")
-        except ImageCms.PyCMSError:
+        except (ImageCms.PyCMSError, OSError):   # OSError: profile bytes are unreadable
             log.warning("bad ICC profile; converting without colour management")
     return im.convert("RGB")
 
@@ -142,5 +154,10 @@ def apply(src: Path) -> None:
     """Compose for each monitor at its own resolution and set it via Noctalia."""
     for mon in monitors():
         wall = compose_wallpaper(src, (mon.width, mon.height))
+        if _noctalia_get(mon.name) == str(wall):
+            # Setting it again would make Noctalia regenerate its theme, which rewrites
+            # ~/.config/hypr/noctalia.lua and so reloads the whole Hyprland config.
+            log.debug("wallpaper already set on %s", mon.name)
+            continue
         _noctalia_set(mon.name, wall)
         log.info("wallpaper set on %s (%dx%d)", mon.name, mon.width, mon.height)

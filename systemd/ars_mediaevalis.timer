@@ -1,0 +1,14 @@
+[Unit]
+Description=Ars Mediaevalis: new artwork each day
+
+[Timer]
+# Just after midnight for the new artwork...
+OnCalendar=*-*-* 00:00:30
+# ...and hourly, so a day that failed (no network) is retried. On a day that is
+# already done this is a state check with no network and no wallpaper change.
+OnCalendar=hourly
+# Catch up after the machine was off at midnight.
+Persistent=true
+
+[Install]
+WantedBy=timers.target
