@@ -224,3 +224,8 @@ Two opt-in tests do reach outside. `ARS_LIVE_TESTS=1` queries the real Met API, 
   Cloisters Collection.
 
 This project is not affiliated with The Metropolitan Museum of Art, Hyprland or Noctalia.
+
+## License
+
+The code is released under the [MIT License](LICENSE). The paintings are in the public domain; the
+history texts shown in the window remain under Wikipedia's CC BY-SA 4.0 licence.
