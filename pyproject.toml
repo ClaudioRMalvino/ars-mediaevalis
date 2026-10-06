@@ -1,0 +1,10 @@
+[project]
+name = "Ars Mediaevalis"
+version = "0.1.0"
+description = "A medieval and renaissance art history wallpaper tool for hyprland and noctalia."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "httpx>=0.28.1",
+    "requests>=2.34.2",
+]
