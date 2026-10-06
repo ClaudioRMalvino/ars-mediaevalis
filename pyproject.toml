@@ -1,5 +1,9 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
-name = "Ars Mediaevalis"
+name = "Ars-Mediaevalis"
 version = "0.1.0"
 description = "A medieval and renaissance art history wallpaper tool for hyprland and noctalia."
 readme = "README.md"
@@ -7,4 +11,11 @@ requires-python = ">=3.12"
 dependencies = [
     "httpx>=0.28.1",
     "requests>=2.34.2",
+    "pillow>=10",
 ]
+
+[project.scripts]
+ars_mediaevalis = "ars_mediaevalis.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ars_mediaevalis"]
