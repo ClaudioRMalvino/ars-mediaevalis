@@ -168,8 +168,40 @@ class TestFromDict(unittest.TestCase):
     def test_one_year_can_clash_with_the_other_default(self) -> None:
         """Tests that a single year that leaves the range empty is rejected too."""
 
-        self.assertEqual(config.from_dict({"date_begin": 1700}), config.Config())
+        self.assertEqual(config.from_dict({"date_begin": 1550}), config.Config())
         self.assertEqual(config.from_dict({"date_end": 1100}), config.Config())
+
+    def test_reversed_range_is_reported(self) -> None:
+        """Tests that the warning for a reversed range names both years."""
+
+        with self.assertLogs(config.log, level="WARNING") as logs:
+            config.from_dict({"date_begin": 1500, "date_end": 1200})
+        self.assertEqual(len(logs.output), 1)
+        for expected in ("date_begin (1500)", "date_end (1200)", "1200-1500"):
+            self.assertIn(expected, logs.output[0])
+
+    def test_reversed_range_keeps_the_other_settings(self) -> None:
+        """Tests that only the two years fall back; the rest of the file stays in effect."""
+
+        cfg: config.Config = config.from_dict({"date_begin": 1500, "date_end": 1200, "margin": 0.1})
+        self.assertEqual(cfg, config.Config(margin=0.1))
+
+    def test_years_span_the_medieval_and_renaissance_period(self) -> None:
+        """Tests that years from 700 to 1600 are accepted, both ends included, and nothing outside."""
+
+        self.assertEqual(config.LIMITS["date_begin"], (700, 1600))
+        self.assertEqual(config.LIMITS["date_end"], (700, 1600))
+        widest: config.Config = config.from_dict({"date_begin": 700, "date_end": 1600})
+        self.assertEqual((widest.date_begin, widest.date_end), (700, 1600))
+        for name, year in (("date_begin", 699), ("date_begin", 1601), ("date_end", 699), ("date_end", 1601)):
+            with self.subTest(setting=name, year=year):
+                self.assertEqual(config.from_dict({name: year}), config.Config())
+
+    def test_narrowest_range_is_one_year(self) -> None:
+        """Tests that consecutive years are accepted."""
+
+        cfg: config.Config = config.from_dict({"date_begin": 1400, "date_end": 1401})
+        self.assertEqual((cfg.date_begin, cfg.date_end), (1400, 1401))
 
     def test_one_year_alone_is_fine_when_in_order(self) -> None:
         """Tests that only date_end, or only date_begin, can be set."""

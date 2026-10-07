@@ -167,7 +167,7 @@ cp config.example.toml ~/.config/ars_mediaevalis/config.toml
 | `background_brightness` | `0.45` | brightness of the blurred backdrop: 0 is black, 1 is as bright as the painting |
 | `max_upscale` | `1.5` | how far a small painting may be enlarged (1 = never, up to 10) |
 | `greeting` | `true` | open the window when a new day's painting arrives |
-| `date_begin`, `date_end` | `1200`, `1500` | years searched in the Met's European Paintings department |
+| `date_begin`, `date_end` | `1200`, `1500` | years searched in the Met's European Paintings department (700 to 1600, begin before end) |
 | `pool_max_age_days` | `30` | days after which the list of candidate paintings is fetched again |
 
 Wallpaper settings apply on the next run, also to today's painting. The date range applies from
