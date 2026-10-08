@@ -166,8 +166,14 @@ class TestChoose(unittest.TestCase):
         self.records: dict[int, dict] = {}
         self.calls: list[int] = []
 
+        self.failing: dict[int, int] = {}   # object ID -> HTTP status its request fails with
+
         def fake_get_object(client, object_id: int) -> dict:
             self.calls.append(object_id)
+            if object_id in self.failing:
+                request: httpx.Request = httpx.Request("GET", f"{artwork.met.BASE_URL}/v1/objects/{object_id}")
+                response: httpx.Response = httpx.Response(self.failing[object_id], request=request)
+                raise httpx.HTTPStatusError("error", request=request, response=response)
             return self.records[object_id]
 
         patcher = mock.patch.object(artwork.met, "get_object", side_effect=fake_get_object)
@@ -194,6 +200,51 @@ class TestChoose(unittest.TestCase):
         self.assertEqual(art.object_id, 3)
         # The pick order is random, so only some of 1 and 2 may have been tried.
         self.assertLessEqual(rejected, {1, 2})
+
+    def test_withdrawn_object_is_skipped_and_rejected(self) -> None:
+        """Tests that an object whose record is a 404 is rejected and another one picked."""
+
+        self.failing[1] = 404
+        self.records[2] = met_object(2)
+        for _ in range(20):
+            rejected: set[int] = set()
+            art: artwork.Artwork = artwork.choose(None, [1, 2], shown=set(), rejected=rejected)
+            self.assertEqual(art.object_id, 2)
+            self.assertLessEqual(rejected, {1})
+
+    def test_withdrawn_object_is_never_asked_for_again(self) -> None:
+        """Tests that a 404 lands in rejected, so later calls do not request the object."""
+
+        self.failing[1] = 404
+        rejected: set[int] = set()
+        with self.assertRaises(RuntimeError):
+            artwork.choose(None, [1], shown=set(), rejected=rejected)
+        self.assertEqual(rejected, {1})
+
+        self.calls.clear()
+        with self.assertRaises(RuntimeError):
+            artwork.choose(None, [1], shown=set(), rejected=rejected)
+        self.assertEqual(self.calls, [])
+
+    def test_pool_of_withdrawn_objects_raises_runtime_error(self) -> None:
+        """Tests that when every object is a 404, choose() gives up with RuntimeError, not an HTTP error."""
+
+        for i in range(1, 4):
+            self.failing[i] = 404
+        with self.assertRaises(RuntimeError):
+            artwork.choose(None, [1, 2, 3], shown=set(), rejected=set())
+        self.assertEqual(sorted(self.calls), [1, 2, 3])
+
+    def test_other_http_errors_are_raised_and_not_rejected(self) -> None:
+        """Tests that a server error or rate limit stops the pick without blaming the object."""
+
+        for status in (403, 429, 500, 503):
+            with self.subTest(status=status):
+                self.failing[1] = status
+                rejected: set[int] = set()
+                with self.assertRaises(httpx.HTTPStatusError):
+                    artwork.choose(None, [1], shown=set(), rejected=rejected)
+                self.assertEqual(rejected, set())
 
     def test_never_picks_shown_ids(self) -> None:
         """Tests that IDs in shown are never requested."""

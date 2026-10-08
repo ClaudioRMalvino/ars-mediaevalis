@@ -39,6 +39,7 @@ class CliTestCase(unittest.TestCase):
 
         self.records: dict[int, dict] = {i: met_record(i) for i in (1, 2, 3)}
         self.image: bytes = jpeg_bytes()
+        self.withdrawn: set[int] = set()   # IDs the search lists but whose record is a 404
         self.online: bool = True
         self.requests: list[httpx.Request] = []
         self.today: datetime.date = TODAY
@@ -48,10 +49,14 @@ class CliTestCase(unittest.TestCase):
             if not self.online:
                 raise httpx.ConnectError("no network", request=req)
             if req.url.path.endswith("/search"):
-                ids: list[int] = sorted(self.records) if req.url.params["offset"] == "0" else []
-                return httpx.Response(200, json={"total": len(self.records), "objectIDs": ids})
+                listed: list[int] = sorted(set(self.records) | self.withdrawn)
+                ids: list[int] = listed if req.url.params["offset"] == "0" else []
+                return httpx.Response(200, json={"total": len(listed), "objectIDs": ids})
             if "/objects/" in req.url.path:
-                return httpx.Response(200, json=self.records[int(req.url.path.rsplit("/", 1)[-1])])
+                object_id: int = int(req.url.path.rsplit("/", 1)[-1])
+                if object_id in self.withdrawn:
+                    return httpx.Response(404, json={"message": "Not a valid object"})
+                return httpx.Response(200, json=self.records[object_id])
             if req.url.host == "images.metmuseum.org":
                 return httpx.Response(200, content=self.image)
             return httpx.Response(404)
@@ -163,6 +168,31 @@ class TestRunFirstTime(CliTestCase):
         self.assertEqual(st.artwork["object_id"], 3)
         self.assertLessEqual(set(st.rejected), {1, 2})
         self.assertEqual(sorted(set(self.object_requests())), sorted(st.rejected + [3]))
+
+
+    def test_withdrawn_objects_do_not_fail_the_run(self) -> None:
+        """Tests that objects the search lists but the Met has withdrawn are skipped and remembered."""
+
+        self.withdrawn = {7, 8, 9}
+
+        self.assertEqual(cli.run(), 0)
+
+        st: cli.state.State = self.state()
+        self.assertIn(st.artwork["object_id"], (1, 2, 3))
+        self.assertLessEqual(set(st.rejected), {7, 8, 9})
+        self.assertEqual(sorted(set(self.object_requests())), sorted(st.rejected + [st.artwork["object_id"]]))
+        self.greet.assert_called_once()
+
+    def test_only_withdrawn_objects_fails_politely(self) -> None:
+        """Tests that a pool of nothing but withdrawn objects returns 1 and remembers them all."""
+
+        self.records.clear()
+        self.withdrawn = {7, 8}
+
+        self.assertEqual(cli.run(), 1)
+
+        self.assertEqual(self.state().rejected, [7, 8])
+        self.apply.assert_not_called()
 
 
 class TestRunSameDay(CliTestCase):

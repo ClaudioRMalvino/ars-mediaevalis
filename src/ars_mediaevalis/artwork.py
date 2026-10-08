@@ -152,7 +152,14 @@ def choose(client: httpx.Client, pool: list[int], shown: set[int], rejected: set
             break
         object_id: int = random.choice(tuple(candidates))
         candidates.discard(object_id)
-        art: Artwork | None = to_artwork(met.get_object(client, object_id))
+        try:
+            art: Artwork | None = to_artwork(met.get_object(client, object_id))
+        except httpx.HTTPStatusError as e:
+            # The search still lists objects the Met has withdrawn: their record is a 404.
+            if e.response.status_code != 404:
+                raise
+            log.info("object %d no longer exists at the Met; skipping", object_id)
+            art = None
         if art:
             return art
         rejected.add(object_id)
